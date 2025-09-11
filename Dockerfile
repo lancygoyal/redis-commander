@@ -1,4 +1,4 @@
-FROM alpine:3.15
+FROM alpine:3.21
 
 WORKDIR /redis-commander
 
@@ -18,11 +18,11 @@ COPY . .
 # for Openshift compatibility set project config dir itself group root and make it group writeable
 RUN  apk update \
   && apk upgrade \
-  && apk add --no-cache ca-certificates dumb-init sed jq nodejs npm yarn \
+  && apk add --no-cache ca-certificates dumb-init sed jq moreutils nodejs npm yarn icu-libs icu-data-en \
   && update-ca-certificates \
   && echo -e "\n---- Create runtime user and fix file access rights ----------" \
-  && adduser "${SERVICE_USER}" -h "${HOME}" -G root -S -u 1000 \
-  && chown -R root.root "${HOME}" \
+  && adduser "${SERVICE_USER}" -h "${HOME}" -G root -S -u 10000 \
+  && chown -R root:root "${HOME}" \
   && chown -R "${SERVICE_USER}" "${HOME}/config" \
   && chmod g+w "${HOME}/config" \
   && chmod ug+r,o-rwx "${HOME}"/config/*.json \
@@ -34,7 +34,7 @@ RUN  apk update \
   && "${HOME}/docker/harden.sh" \
   && rm -rf /tmp/* /root/.??* /root/cache /var/cache/apk/*
 
-USER 1000
+USER 10000
 
 HEALTHCHECK --interval=1m --timeout=2s CMD ["/redis-commander/bin/healthcheck.js"]
 
@@ -42,4 +42,3 @@ ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["/redis-commander/docker/entrypoint.sh"]
 
 EXPOSE 8081
-

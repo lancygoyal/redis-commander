@@ -1,7 +1,16 @@
 /.idea
-/node_modules
+/node_modules/
 *.rdb
 *.iml
 /config/local.json
 /config/local-*.json
 .DS_Store
+/docs/coverage/
+.nyc_output/
+/test/test-ca/
+/test/local/
+
+# files pulled by actions, no check in
+helm-docs
+.github/kubeval
+k8s/helm-chart/redis-commander/example.values.yaml

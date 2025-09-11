@@ -1,9 +1,74 @@
 # Redis-Commander CHANGELOG
 
 ## Next Version
+
+## Version 0.9.1
+#### Bugfixes
+* fix bug with docker variables used by REPLACE_CONFIG_ENV containing some special characters
+* update express from 4.21.1 to 4.21.2 (fix CVE-2024-52798)
+* update cross-spawn from 7.0.3 to 7.0.6 (fix CVE-2024-21538)  
+* update base image to Alpine@3.21 and Node.js@22 
+* update bcrypt from 5.2.1 to 6.0.0 (fix SNYK-JS-INFLIGHT-6095116 for production image)
+* update elliptic from 6.6.0 to 6.6.1 (fix SNYK-JS-ELLIPTIC-8720086)
+* update @babel/helpers from 7.26.7 to 7.26.10 (fix CVE-2025-27789)
+* update tarfs from 2.1.2 to 2.1.3 (fix CVE-2025-48)
+* update pbkdf2 from 3.1.2 to 3.1.3 (fix CVE-2025-6545, CVE-2025-6547)
+* update brace-expansion from 1.1.11 to 1.1.12 (fix CVE-2025-5889)
+
+#### Enhancements
+* update ioredis from 5.4.1 to 5.5.0
+* update chai from 4.5.0 to 5.2.1
+* update mocha from 11.1.0 to 11.7.1
+
+## Version 0.9.0
+#### Bugfixes
+* update jsonwebtoken from 8.5.1 to 9.0.0 (fix CVE-2022-23529, CVE-2022-23541, CVE-2022-23539, CVE-2022-23540)
+* update json5 from 2.2.1 to 2.2.3 (fix CVE-2022-46175)
+* update cmdparser from 0.0.3 to 0.1.0 (fix CVE-2021-43138), #517
+* partial update of semver to 7.5.4 (fix CVE-2022-2588)
+* update @babel/traverse from 7.22.5 to 7.23.3 (fix CVE-2023-45133) 
+* update browserify-sign from 4.2.1 to 4.2.2 (fix CVE-2023-46234)
+* update elliptic from 6.5.4 to 6.6.0 (fix CVE-2024-42459, CVE-2024-42460, CVE-2024-42461, CVE-2024-48948)
+* update cookie from 0.6.0 to 0.7.1 (fix CVE-2024-47764)
+
+#### Enhancements
+* allow using IPv6 addresses for Redis connection definitions. (except REDIS_HOSTS env var, here no IPv6 allowed, use host names instead) 
+* allow setting a custom HTTP header name used for the JWT session authentication token
+* add option to overwrite global folding character per connection
+* add Sentinel TLS connections and improved configuration and env var handling for TLS secured connections, #514 
+* add Redis Cluster support, #160 #216 #527
+* allow defining additional commands as safe for read-only mode, defaulting to "info" and "select", #542
+* update base image to alpine@3.17 using NodeJS 18.x now, #511
+* update helm chart autoscaling apis for newer K8s versions, #520
+* update helm chart to allow setting ingressClassName for newer K8s versions, #494
+* update UI for better visibility on how to close redis commands modal, #456
+* update ioredis from 4.28.5 to 5.4.1
+* update dependencies yargs@17.7.2, ejs@3.1.10, jstree@3.3.17, config@3.3.12, body-parser@1.20.3
+* update "@cyclonedx/cyclonedx-npm"@1.19.3
+* improve password login check and prevent timing attacks on username check
+
+## Version 0.8.1
+#### Bugfixes
+* fix text not copied when in json view mode
+* fix display of big integer and float numbers in json view, #479
+* update to alpine:3.16 as base image, #495
+* update shell-quote from 1.7.2 to 1.7.3 (fix CVE-2021-42740)
+#### Enhancements
+* display ReJSON data as formatted json with support for big numbers and floats, #478
+* add editing ReJSON data, #452
+* update dependencies to fix security vulnerabilities in ansi-regex@5.0.1, filelist@1.0.4, minimatch@3.1.2, shell-quote@1.7.3
+* update dependencies express@4.18.2, body-parser@1.20.1, ejs@3.1.8, async@3.2.4, clipboard@2.0.11, yargs@17.6.0, inflection@1.13.4. config@3.3.8
+* improve documentation, #498 #500 #506
+* add software bill of material in CycloneDX format
+
+## Version 0.8.0
 #### Bugfixes
 #### Enhancements
-* update dependencies
+* update dependencies to fix security vulnerabilities in minimist, json-viewer, async, config, clipboard
+* make url path of signin route configurable (config file and env var), #467
+* add redis username and sentinel username support, #476
+* update helm chart to allow setting redis username
+* fix json display of big numbers not fitting into javascript "number" type, #400
 
 ## Version 0.7.3
 #### Bugfixes

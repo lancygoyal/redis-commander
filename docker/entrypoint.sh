@@ -222,12 +222,44 @@ if [ -n "$REDIS_SOCKET" ]; then
     set -- "$@" "--redis-socket" "$REDIS_SOCKET"
 fi
 
-if [ -n "$REDIS_TLS" ] && parse_boolean "$REDIS_TLS"; then
-    set -- "$@" "--redis-tls"
+if [ -n "$REDIS_USERNAME" ]; then
+    set -- "$@" "--redis-username" "$REDIS_USERNAME"
 fi
 
 if [ -n "$REDIS_PASSWORD" ]; then
     set -- "$@" "--redis-password" "$REDIS_PASSWORD"
+fi
+
+if [ -n "$REDIS_TLS" ] && parse_boolean "$REDIS_TLS"; then
+    set -- "$@" "--redis-tls"
+fi
+
+if [ -n "$REDIS_TLS_CA_CERT" ]; then
+    set -- "$@" "--redis-tls-ca-cert" "$REDIS_TLS_CA_CERT"
+fi
+
+if [ -n "$REDIS_TLS_CA_CERT_FILE" ]; then
+    set -- "$@" "--redis-tls-ca-cert-file" "$REDIS_TLS_CA_CERT_FILE"
+fi
+
+if [ -n "$REDIS_TLS_CERT" ]; then
+    set -- "$@" "--redis-tls-cert" "$REDIS_TLS_CERT"
+fi
+
+if [ -n "$REDIS_TLS_CERT_FILE" ]; then
+    set -- "$@" "--redis-tls-cert-file" "$REDIS_TLS_CERT_FILE"
+fi
+
+if [ -n "$REDIS_TLS_KEY" ]; then
+    set -- "$@" "--redis-tls-key" "$REDIS_TLS_KEY"
+fi
+
+if [ -n "$REDIS_TLS_KEY_FILE" ]; then
+    set -- "$@" "--redis-tls-key-file" "$REDIS_TLS_KEY_FILE"
+fi
+
+if [ -n "$REDIS_TLS_SERVER_NAME" ]; then
+    set -- "$@" "--redis-tls-server-name" "$REDIS_TLS_SERVER_NAME"
 fi
 
 if [ -n "$REDIS_DB" ]; then
@@ -254,8 +286,56 @@ if [ -n "$SENTINEL_NAME" ]; then
     set -- "$@" "--sentinel-name" "$SENTINEL_NAME"
 fi
 
+if [ -n "$SENTINEL_USERNAME" ]; then
+    set -- "$@" "--sentinel-username" "$SENTINEL_USERNAME"
+fi
+
 if [ -n "$SENTINEL_PASSWORD" ]; then
     set -- "$@" "--sentinel-password" "$SENTINEL_PASSWORD"
+fi
+
+if [ -n "$SENTINEL_TLS" ] && parse_boolean "$SENTINEL_TLS"; then
+    set -- "$@" "--sentinel-tls"
+fi
+
+if [ -n "$SENTINEL_TLS_CA_CERT" ]; then
+    set -- "$@" "--sentinel-tls-ca-cert" "$SENTINEL_TLS_CA_CERT"
+fi
+
+if [ -n "$SENTINEL_TLS_CA_CERT_FILE" ]; then
+    set -- "$@" "--sentinel-tls-ca-cert-file" "$SENTINEL_TLS_CA_CERT_FILE"
+fi
+
+if [ -n "$SENTINEL_TLS_CERT" ]; then
+    set -- "$@" "--sentinel-tls-cert" "$SENTINEL_TLS_CERT"
+fi
+
+if [ -n "$SENTINEL_TLS_CERT_FILE" ]; then
+    set -- "$@" "--sentinel-tls-cert-file" "$SENTINEL_TLS_CERT_FILE"
+fi
+
+if [ -n "$SENTINEL_TLS_KEY" ]; then
+    set -- "$@" "--sentinel-tls-key" "$SENTINEL_TLS_KEY"
+fi
+
+if [ -n "$SENTINEL_TLS_KEY_FILE" ]; then
+    set -- "$@" "--sentinel-tls-key-file" "$SENTINEL_TLS_KEY_FILE"
+fi
+
+if [ -n "$SENTINEL_TLS_SERVER_NAME" ]; then
+    set -- "$@" "--sentinel-tls-server-name" "$SENTINEL_TLS_SERVER_NAME"
+fi
+
+if [ -n "$CLUSTERS" ]; then
+    set -- "$@" "--clusters" "$CLUSTERS"
+fi
+
+if [ -n "$IS_CLUSTER" ] && parse_boolean "$IS_CLUSTER"; then
+    set -- "$@" "--is-cluster"
+fi
+
+if [ -n "$CLUSTER_NO_TLS_VALIDATION" ] && parse_boolean "$CLUSTER_NO_TLS_VALIDATION"; then
+    set -- "$@" "--cluster-no-tls-validation"
 fi
 
 if [ -n "$REPLACE_CONFIG_ENV" ]; then
@@ -273,8 +353,9 @@ if [ -n "$REPLACE_CONFIG_ENV" ]; then
     for env_var in ${env_vars_replace}; do
         for json_conf in config/*.json; do
             if [ "$json_conf" != "config/custom-environment-variables.json" ]; then
-                # need to replace &\/ from content of env_var var as they are special chars in sed
-                sed -i 's/"'"$env_var"'"/"'"$(printenv "$env_var" | sed 's/\\/\\\\/g; s/&/\\&/g; s#/#\\/#g;')"'"/g' "$json_conf"
+              if grep -q "$env_var" "$json_conf"; then
+                jq --arg var_name "$env_var" --arg new_value "$(printenv "$env_var")" -f "$(dirname "$0")/replace-var-filter.jq" "$json_conf" | sponge "$json_conf"
+              fi
             fi
         done
     done
@@ -283,8 +364,8 @@ fi
 
 # syntax check of all config files to help detecting invalid ones early
 for i in config/*.json; do
-    if ! jq empty < "${i}"; then
-        echo "ERROR: config file ${i} has invalid json syntax"
+    if ! jq empty "${i}"; then
+        echo "ERROR: config file ${i} has invalid json syntax" >> /dev/stderr
         exit 1
     fi
 done

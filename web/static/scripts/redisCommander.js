@@ -1,9 +1,73 @@
 'use strict';
 
-var CmdParser = require('cmdparser');
+const CmdParser = require('cmdparser');
 var cmdparser;
-var losslessJSON = require('lossless-json');
-var simpleObjRE = /^\s*[{\[]/;
+const losslessJSON = require('lossless-json');
+const simpleObjRE = /^\s*[{\[]/;
+
+/** wrapper object to hold redis connection related information */
+const connections = {
+  /** list with all redis connections the server has,
+   * object with
+   * {
+   * conId: string,
+   * label: string,
+   * foldingChar: string,
+   * options: {host: string, port: number, type: string, db: number}
+   * }
+   */
+  list: [],
+  /** list of all JSTree root tree objects, one per connection */
+  treeObjects: [],
+  /** find one connection by their connectionId */
+  findById: function(id) {
+    if (Array.isArray(this.list)) {
+      return this.list.find((c) => c.conId === id)
+    }
+    return null;
+  }
+}
+
+const  fullMenu = {
+  'renameKey': {
+    icon: './images/icon-edit.png',
+    label: 'Rename Key',
+    action: renameKey
+  },
+  'addKey': {
+    icon: './images/icon-plus.png',
+    label: 'Add Key',
+    action: addKey
+  },
+  'custerNodes': {
+    icon: './images/icon-info.png',
+    label: 'Cluster Nodes',
+    action: clusterNodes
+  },
+  'refresh': {
+    icon: './images/icon-refresh.png',
+    label: 'Refresh',
+    action: function (obj) {
+      jQuery.jstree.reference('#keyTree').refresh(obj);
+    }
+  },
+  'export': {
+    icon: './images/icon-download.png',
+    label: 'Export Keys',
+    action: exportKey
+  },
+  'remKey': {
+    icon: './images/icon-trash.png',
+    label: 'Remove Key',
+    action: deleteKey
+  },
+  'remConnection': {
+    icon: './images/icon-trash.png',
+    label: 'Disconnect',
+    action: removeServer
+  }
+};
+
 
 function loadTree () {
   $.get('apiv2/connection', function (isConnected) {
@@ -16,9 +80,8 @@ function loadTree () {
         }
       });
       $.get('connections', function (data) {
-        var json_dataData = [];
-
         if (data.connections) {
+          connections.list = data.connections;
           data.connections.every(function (instance) {
             // build root objects for jstree view on left side
             var treeObj = {
@@ -29,14 +92,14 @@ function loadTree () {
               children: true,
               rel: 'root'
             };
-            json_dataData.push(treeObj);
+            connections.treeObjects.push(treeObj);
             return true;
          });
         }
         return onJSTreeDataComplete();
 
         function getJsTreeData(node, cb) {
-          if (node.id === '#') return cb(json_dataData);
+          if (node.id === '#') return cb(connections.treeObjects);
 
           var dataUrl;
           if (node.parent === '#') {
@@ -93,53 +156,34 @@ function loadTree () {
               },
               contextmenu: {
                   items: function (node) {
-                      var menu = {
-                          'renameKey': {
-                            icon: './images/icon-edit.png',
-                            label: 'Rename Key',
-                            action: renameKey
-                          },
-                          'addKey': {
-                            icon: './images/icon-plus.png',
-                            label: 'Add Key',
-                            action: addKey
-                          },
-                          'refresh': {
-                            icon: './images/icon-refresh.png',
-                            label: 'Refresh',
-                            action: function (obj) {
-                                jQuery.jstree.reference('#keyTree').refresh(obj);
-                            }
-                          },
-                          'export': {
-                            icon: './images/icon-download.png',
-                            label: 'Export Keys',
-                            action: exportKey
-                          },
-                          'remKey': {
-                            icon: './images/icon-trash.png',
-                            label: 'Remove Key',
-                            action: deleteKey
-                          },
-                          'remConnection': {
-                            icon: './images/icon-trash.png',
-                            label: 'Disconnect',
-                            action: removeServer
-                          }
-                      };
+                      var menu;
                       var rel = node.original.rel;
                       if (typeof rel === 'undefined' ) {    // folder
-                        delete menu['renameKey'];
+                        menu = {
+                          'addKey': fullMenu['addKey'],
+                          'refresh': fullMenu['refresh'],
+                          'export': fullMenu['export'],
+                          'remKey': fullMenu['remKey']
+                        }
                       }
-                      if (typeof rel !== 'undefined' && rel !== 'root') {  // some redis key
-                        delete menu['addKey'];
+                      else if (rel === 'root') {     // root connection object (first level in tree-view)
+                        menu = {
+                          'addKey': fullMenu['addKey'],
+                          'refresh': fullMenu['refresh'],
+                          'export': fullMenu['export'],
+                          'remConnection': fullMenu['remConnection']
+                        }
+                        if (node.id.startsWith('C:')) {
+                          menu['custerNodes'] = fullMenu['custerNodes'];
+                        }
                       }
-                      if (rel !== 'root') {
-                        delete menu['remConnection'];
-                      }
-                      if (rel === 'root') {     // root connection object (first level in tree-view)
-                        delete menu['renameKey'];
-                        delete menu['remKey'];
+                      else {  // some redis key
+                        menu = {
+                          'renameKey': fullMenu['renameKey'],
+                          'refresh': fullMenu['refresh'],
+                          'export': fullMenu['export'],
+                          'remKey': fullMenu['remKey']
+                        }
                       }
                       if (redisReadOnly) {
                         delete menu['renameKey'];
@@ -270,6 +314,7 @@ function loadKey (connectionId, key, index) {
     setRootConnectionNetworkError(false, getKeyTree().get_selected(true)[0]);
     if (typeof keyData === 'string') keyData = JSON.parse(keyData);
     keyData.connectionId = connectionId;
+    if (uiConfig.clipboard) uiConfig.clipboard.destroy();
     console.log('rendering type ' + keyData.type);
     switch (keyData.type) {
       case 'string':
@@ -408,13 +453,23 @@ function setupAddServerForm() {
 
   // prepare all input elements
   serverModal.find('#addServerGroupSentinel').hide();
+  serverModal.find('#addServerGroupCluster').hide();
   serverModal.find('#serverType').on('change', function () {
-    if ($(this).val() === 'redis') {
-      serverModal.find('#addServerGroupRedis').show();
-      serverModal.find('#addServerGroupSentinel').hide();
-    } else {
-      serverModal.find('#addServerGroupRedis').hide();
-      serverModal.find('#addServerGroupSentinel').show();
+    switch ($(this).val()) {
+      case 'sentinel':
+        serverModal.find('#addServerGroupRedis').hide();
+        serverModal.find('#addServerGroupSentinel').show();
+        serverModal.find('#addServerGroupCluster').hide();
+        break;
+      case 'cluster':
+        serverModal.find('#addServerGroupRedis').hide();
+        serverModal.find('#addServerGroupSentinel').hide();
+        serverModal.find('#addServerGroupCluster').show();
+        break;
+      default: // 'redis'
+        serverModal.find('#addServerGroupRedis').show();
+        serverModal.find('#addServerGroupSentinel').hide();
+        serverModal.find('#addServerGroupCluster').hide();
     }
   });
   serverModal.find('input:radio[name=sentinelPWType]').on('change', function() {
@@ -426,6 +481,60 @@ function setupAddServerForm() {
       serverModal.find('#sentinelPassword').prop('disabled', true)
         .prev('label').addClass('muted');
     }
+  });
+  serverModal.find('input:radio[name=sentinelTLS]').on('change', function() {
+    if ($(this).val() === 'custom') {
+      serverModal.find('#sentinelTLSCA').prop('disabled', false)
+        .prev('label').removeClass('muted');
+      serverModal.find('#sentinelTLSPublicKey').prop('disabled', false)
+        .prev('label').removeClass('muted');
+      serverModal.find('#sentinelTLSPrivateKey').prop('disabled', false)
+        .prev('label').removeClass('muted');
+      serverModal.find('#sentinelTLSServerName').prop('disabled', false)
+        .prev('label').removeClass('muted');
+    }
+    else {
+      serverModal.find('#sentinelTLSCA').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+      serverModal.find('#sentinelTLSPublicKey').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+      serverModal.find('#sentinelTLSPrivateKey').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+      serverModal.find('#sentinelTLSServerName').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+    }
+  });
+  serverModal.find('input:radio[name=redisTLS]').on('change', function() {
+    if ($(this).val() === 'custom') {
+      serverModal.find('#redisTLSCA').prop('disabled', false)
+        .prev('label').removeClass('muted');
+      serverModal.find('#redisTLSPublicKey').prop('disabled', false)
+        .prev('label').removeClass('muted');
+      serverModal.find('#redisTLSPrivateKey').prop('disabled', false)
+        .prev('label').removeClass('muted');
+      serverModal.find('#redisTLSServerName').prop('disabled', false)
+        .prev('label').removeClass('muted');
+    }
+    else {
+      serverModal.find('#redisTLSCA').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+      serverModal.find('#redisTLSPublicKey').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+      serverModal.find('#redisTLSPrivateKey').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+      serverModal.find('#redisTLSServerName').val('').prop('disabled', true)
+        .prev('label').addClass('muted');
+    }
+    // disable following only for no tls, other setting allow this one
+    if ($(this).val() === 'no') {
+      serverModal.find('#clusterNoTlsValidation').prop('disabled', true)
+        .parent('label').addClass('muted');
+    }
+    else {
+      serverModal.find('#clusterNoTlsValidation').prop('disabled', false)
+        .parent('label').removeClass('muted');
+    }
+
   });
   serverModal.find('#label').trigger('focus');
 }
@@ -532,10 +641,10 @@ function selectTreeNodeString (data) {
     try {
       var jsonObject = data.value;
       if (jsonObject.match(simpleObjRE)) {
-        jsonObject = losslessJSON.parse(data.value, losslessJsonReviver);
+        jsonObject = losslessJSON.parse(data.value);
         isJsonParsed = true;
       }
-      $('#jqtree_string_div').jsonViewer(jsonObject, {withQuotes: true, withLinks: false});
+      $('#jqtree_string_div').jsonViewer(jsonObject, {withQuotes: true, withLinks: false, bigNumbers: true});
       if ((uiConfig.jsonViewAsDefault & uiConfig.const.jsonViewString) > 0) dataUIFuncs.onModeJsonButtonClick('#editStringForm')
     } catch (ex) {
       $('#isJson').prop('checked', false);
@@ -642,8 +751,41 @@ function selectTreeNodeStream (data) {
 }
 
 function selectTreeNodeReJSON(data) {
-  renderEjs('templates/viewReJSON.ejs', data, $('#body'), function() {
+  renderEjs('templates/editReJSON.ejs', data, $('#body'), function() {
     console.log('rendered ReJSON template')
+    // do not check if it is valid json - assume it is as its stored server-side as ReJSON
+    // simplifies handling here compared to pure string data
+    const jsonObject = losslessJSON.parse(data.value);
+    $('#jqtree_json_div').jsonViewer(jsonObject, {withQuotes: true, withLinks: false, bigNumbers: true});
+    if ((uiConfig.jsonViewAsDefault & uiConfig.const.jsonViewString) > 0) dataUIFuncs.onModeJsonButtonClick('#editJsonForm')
+
+    $('#stringValue').val(data.value);
+    addInputValidator('stringValue', 'json');
+
+    if (!redisReadOnly) {
+      $('#editJsonForm').off('submit').on('submit', function(event) {
+        console.log('saving');
+        event.preventDefault();
+        var editForm = $(event.target);
+        $('#saveKeyButton').attr('disabled', 'disabled').html('<i class="icon-refresh"></i> Saving');
+
+        $.post(editForm.attr('action'), editForm.serialize()
+        ).done(function(data2, status) {
+          console.log('saved', arguments);
+          refreshTree();
+          getKeyTree().select_node(0);
+        })
+        .fail(function(err) {
+          console.log('save error', arguments);
+          alert('Could not save "' + err.statusText + '"');
+        })
+        .always(function() {
+          setTimeout(function() {
+            $('#saveKeyButton').prop('disabled', false).html('Save');
+          }, 500);
+        });
+      });
+    }
   });
 }
 
@@ -658,12 +800,13 @@ function refreshTree () {
 function addKey (connectionId, key) {
   if (typeof(connectionId) === 'object') {
     // context menu click
-    var node = getKeyTree().get_node(connectionId.reference[0]);
-    key = getFullKeyPath(node);
-    if (key.length > 0 && !key.endsWith(foldingCharacter)) {
-      key = key + foldingCharacter;
-    }
+    const node = getKeyTree().get_node(connectionId.reference[0]);
     connectionId = getRootConnection(node);
+    const foldingChar = connections.findById(connectionId).foldingChar
+    key = getFullKeyPath(node);
+    if (key.length > 0 && !key.endsWith(foldingChar)) {
+      key = key + foldingChar;
+    }
   }
   $('#keyValue').val(key);
   $('#addKeyModal').modal('show');
@@ -717,9 +860,10 @@ function deleteKey (connectionId, key) {
       connectionId = getRootConnection(node);
   }
   node = getKeyTree().get_node(connectionId);
+  const foldingChar = connections.findById(connectionId).foldingChar
 
   // context menu or DEL key pressed on folder item
-  if (key.endsWith(foldingCharacter)) {
+  if (key.endsWith(foldingChar)) {
     deleteBranch(connectionId, key);
     return;
   }
@@ -760,6 +904,34 @@ function decodeKey (connectionId, key) {
   });
 }
 
+function clusterNodes (connectionId) {
+  if (typeof(connectionId) === 'object') {
+    // context menu click
+    const node = getKeyTree().get_node(connectionId.reference[0]);
+    connectionId = getRootConnection(node);
+    const foldingChar = connections.findById(connectionId).foldingChar
+  }
+  $.get('apiv2/server/' + encodeURIComponent(connectionId) + '/cluster/nodes', function (data) {
+    if (data.error) {
+      alert("Error fetching cluster nodes:\n" + data.error);
+    }
+    else {
+      const modal = $('#clusterNodesModal');
+      const tab = modal.find('#clusterNodesTab');
+      tab.empty();
+      tab.append('<tr><th>ID</th><th>Node</th><th>Flags</th><th>Current Master Node</th>' +
+        '<th>Link-State</th></th><th>Ping</th><th>Last Pong Received</th><th>Config-Epoch</th><th>Slots</th></tr>');
+      data.data.forEach(function (n) {
+        tab.append(`<tr><td>${n.id}</td> <td>${n.node}</td> <td class="text-center">${n.flags}</td>` +
+          `<td>${n.primaryMaster}</td> <td class="text-center">${n.linkState}</td>` +
+          `<td class="text-center">${n.pingSent}</td><td class="text-center">${n.pongReceived}</td>` +
+          `<td class="text-center">${n.configEpoch}</td><td>${n.slots}</td></tr>`);
+      });
+      modal.modal('show');
+    }
+  });
+}
+
 function encodeString (connectionId, key) {
   $.post('apiv2/encodeString/' + encodeURIComponent($('#stringValue').val()), function (data, status) {
     if (status !== 'success') {
@@ -779,9 +951,10 @@ function encodeString (connectionId, key) {
 }
 
 function deleteBranch (connectionId, branchPrefix) {
-  var node = getKeyTree().get_node(connectionId);
-  var query = (branchPrefix.endsWith(foldingCharacter) ? branchPrefix : branchPrefix + foldingCharacter) + '*';
-  var result = confirm('Are you sure you want to delete "' + query + '" from "' + node.text + '"? This will delete all children as well!');
+  const node = getKeyTree().get_node(connectionId);
+  const foldingChar = connections.findById(connectionId).foldingChar
+  const query = (branchPrefix.endsWith(foldingChar) ? branchPrefix : branchPrefix + foldingChar) + '*';
+  const result = confirm('Are you sure you want to delete "' + query + '" from "' + node.text + '"? This will delete all children as well!');
   if (result) {
     $.post('apiv2/keys/' + encodeURIComponent(connectionId) + '/' + encodeURIComponent(query) + '?action=delete', function (data, status) {
       if (status !== 'success') {
@@ -1214,6 +1387,7 @@ var dataUIFuncs = {
 
     $('#viewModeJsonButton').css('display', 'inline');
     $('#viewModeStringButton').css('display', 'none');
+    $('#saveKeyButton').css('display', 'inline');
   },
 
   /** function to toggle between display of raw strings and json object view.
@@ -1231,6 +1405,7 @@ var dataUIFuncs = {
 
     $('#viewModeJsonButton').css('display', 'none');
     $('#viewModeStringButton').css('display', 'inline');
+    $('#saveKeyButton').css('display', 'none');
   },
 
   /** this function generates the json object tree view for all elements containing
@@ -1246,7 +1421,7 @@ var dataUIFuncs = {
       var plain = current.prev().html();
       try {
         // display either as string if no valid json or as json object otherwise, ignore exception
-        current.jsonViewer(losslessJSON.parse(plain, losslessJsonReviver), {withQuotes: true, withLinks: false});
+        current.jsonViewer(losslessJSON.parse(plain), {withQuotes: true, withLinks: false, bigNumbers: true});
       }
       catch(ex) {
         // add json-viewer class manually to get same color/fonts
@@ -1263,25 +1438,6 @@ function escapeHtml (str) {
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br>')
     .replace(/\s/g, '&nbsp;');
-}
-
-/** helper function to parse json witch may contain big numbers - all numbers that can not be displayed
- *  as a javascript number will be converted to a string. than the correct values can be display as formatted
- *  json at least (needed for jquery.json-viewer)
- */
-function losslessJsonReviver(key, value) {
-  if (value && value.isLosslessNumber) {
-    try {
-      return value.valueOf();   // smaller numbers can be converted to a js Number without loosing information
-    }
-    catch(e) {
-      // precision will be lost - does not fit into Number, therefore return string
-      return value.toString();
-    }
-  }
-  else {
-    return value;
-  }
 }
 
 /** Fetch the url give at filename from the server and render the content of this
@@ -1310,6 +1466,7 @@ function renderEjs(filename, data, element, callback) {
 
 var uiConfig = {
   jsonViewAsDefault: 0,
+  clipboard: null,
   const: {
     jsonViewString: 1 << 0,
     jsonViewList: 1 << 1,
@@ -1394,7 +1551,7 @@ function clearAddServerForm() {
   $('#selectServerDbList').attr('data-connstring', null).empty();
 }
 
-/** extract json data from ad server form and show new modal to allow selection all dbs
+/** extract json data from add server form and show new modal to allow selection of all dbs
  *  found at this redis server.
  *  Only fields for server type, host, port, path and passwords are used. Label and database are ignored.
  */
@@ -1432,7 +1589,7 @@ function detectServerDB() {
 /** check list of selectServerDbModal and add all selected databases with their display name
  *  do ajax post call for every selected to "/login" and reload at the end to refresh entire UI
  */
- function selectNewServerDbs() {
+function selectNewServerDbs() {
   var addServerForm = $('#addServerForm');
   var list = $('#selectServerDbModal').find('#selectServerDbList');
   var connectionString = list.data('connstring');
@@ -1463,13 +1620,6 @@ function detectServerDB() {
   });
 }
 
-function loadDefaultServer (host, port) {
-  console.log('host ' + host);
-  console.log('port ' + port);
-  $('#hostname').val(host);
-  $('#port').val(port);
-  $('#addServerForm').trigger('submit');
-}
 
 function loadConfig (callback) {
   $.get('config', function (data) {
@@ -1597,7 +1747,7 @@ function toggleRedisModal() {
 
 $(function() {
   function refreshQueryToken() {
-    $.post('signin', {}, function (data, status) {
+    $.post(signinPath, {}, function (data, status) {
       if ((status !== 'success') || !data || !data.ok) {
         console.error('Cannot refresh query token');
         return;

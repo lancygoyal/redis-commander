@@ -2,21 +2,23 @@
 
 'use strict';
 
-let yargs = require('yargs');
-let Redis = require('ioredis');
-var isEqual = require('lodash.isequal');
-let myUtils = require('../lib/util');
+const yargs = require('yargs');
+const Redis = require('ioredis');
+const isEqual = require('lodash.isequal');
+const myUtils = require('../lib/util');
+const fs = require('fs');
 
 // fix the cwd to project base dir for browserify and config loading
-let path = require('path');
+const path = require('path');
 process.chdir( path.join(__dirname, '..') );
 
 process.env.ALLOW_CONFIG_MUTATIONS = true;
-let config = require('config');
+const config = require('config');
 
-let redisConnections = [];
+const connectionWrapper = require('../lib/connections');
+let redisConnections;
 
-let args = yargs
+const args = yargs
   .alias('h', 'help')
   .alias('h', '?')
   .options('redis-port', {
@@ -30,6 +32,10 @@ let args = yargs
   .options('redis-socket', {
     type: 'string',
     describe: 'The unix-socket to find redis on.'
+  })
+  .options('redis-username', {
+    type: 'string',
+    describe: 'The redis username.'
   })
   .options('redis-password', {
     type: 'string',
@@ -60,13 +66,97 @@ let args = yargs
     type: 'string',
     describe: 'The sentinel group name to use.'
   })
+  .options('sentinel-username', {
+    type: 'string',
+    describe: 'The sentinel username to use.'
+  })
   .options('sentinel-password', {
     type: 'string',
     describe: 'The sentinel password to use.'
   })
+  .options('clusters', {
+    type: 'string',
+    describe: 'Comma separated list of redis cluster server with host:port.'
+  })
+  .options('is-cluster', {    // names-with-dash are automatically converted to namesWithDash too
+    type: 'boolean',
+    describe: 'Flag to use parameter from redis-host and redis-port as Redis cluster member',
+    default: false
+  })
+  .options('cluster-no-tls-validation', {
+    type: 'boolean',
+    describe: 'Flag to disable tls host name validation within cluster node communication (needed for AWS)',
+    default: false
+  })
   .options('redis-tls', {
     type: 'boolean',
-    describe: 'Use TLS for connection to redis server or sentinel.',
+    describe: 'Use TLS for connection to redis server. Required for TLS connections.',
+    default: false
+  })
+  .options('redis-tls-ca-cert', {
+    type: 'string',
+    describe: 'Use PEM-style CA certificate key for connection to redis server. Requires "redis-tls=true"',
+  })
+  .options('redis-tls-ca-cert-file', {
+    type: 'string',
+    describe: 'File path to PEM-style CA certificate key for connection to redis server. Requires "redis-tls=true", Overrides "redis-tls-ca-cert" if set too.',
+  })
+  .options('redis-tls-cert', {
+    type: 'string',
+    describe: 'Use PEM-style public key for connection to redis server. Requires "redis-tls=true"',
+  })
+  .options('redis-tls-cert-file', {
+    type: 'string',
+    describe: 'File path to PEM-style public key for connection to redis server. Requires "redis-tls=true", Overrides "redis-tls-cert" if set too.',
+  })
+  .options('redis-tls-key', {
+    type: 'string',
+    describe: 'Use PEM-style private key for connection to redis server. Requires "redis-tls=true"',
+  })
+  .options('redis-tls-key-file', {
+    type: 'string',
+    describe: 'File path PEM-style private key for connection to redis server. Requires "redis-tls=true", Overrides "redis-tls-key" if set too.',
+  })
+  .options('redis-tls-server-name', {
+    type: 'string',
+    describe: 'Server name to confirm client connection. Server name for the SNI (Server Name Indication) TLS extension. Requires "redis-tls=true"',
+  })
+  .options('sentinel-tls', {
+    type: 'boolean',
+    describe: 'Enable TLS for sentinel mode. If no special "sentinel-tls-*" option is defined the redis TLS settings are reused ("redis-tls-*"). Required for TLS sentinel connections.',
+    default: false
+  })
+  .options('sentinel-tls-ca-cert', {
+    type: 'string',
+    describe: 'Use PEM-style CA certificate key for connection to sentinel. Requires "sentinel-tls=true"',
+  })
+  .options('sentinel-tls-ca-cert-file', {
+    type: 'string',
+    describe: 'File path to PEM-style CA certificate key for connection to sentinel. Requires "sentinel-tls=true", Overrides "sentinel-tls-ca-cert" if set too.',
+  })
+  .options('sentinel-tls-cert', {
+    type: 'string',
+    describe: 'Use PEM-style public key for connection to sentinel. Requires "sentinel-tls=true"',
+  })
+  .options('sentinel-tls-cert-file', {
+    type: 'string',
+    describe: 'File path to PEM-style public key for connection to sentinel. Requires "sentinel-tls=true", Overrides "sentinel-tls-cert" if set too.',
+  })
+  .options('sentinel-tls-key', {
+    type: 'string',
+    describe: 'Use PEM-style private key for connection to sentinel. Requires "sentinel-tls=true"',
+  })
+  .options('sentinel-tls-key-file', {
+    type: 'string',
+    describe: 'File path to PEM-style private key for connection to sentinel. Requires "sentinel-tls=true", Overrides "sentinel-tls-key" if set too.',
+  })
+  .options('sentinel-tls-server-name', {
+    type: 'string',
+    describe: 'Server name to confirm client connection. Server name for the SNI (Server Name Indication) TLS extension. Requires "sentinel-tls=true"',
+  })
+  .options('insecure-certificate', {
+    type: 'boolean',
+    describe: 'Disable certificate check for all certificates (Redis, Sentinel, Cluster). Should not be used in production!',
     default: false
   })
   .options('noload', {
@@ -86,7 +176,7 @@ let args = yargs
   .options('test', {
     alias: 't',
     type: 'boolean',
-    describe: 'Test final configuration (file, env-vars, command line)'
+    describe: 'Test final configuration (file, env-vars, command line).'
   })
   .options('open', {
     // open local web-browser to connect to web ui on startup of server daemon too
@@ -144,12 +234,12 @@ let args = yargs
   })
   .options('trust-proxy', {
     type: 'boolean',
-    describe: 'App is run behind proxy (enable Express "trust proxy")',
+    describe: 'App is run behind proxy (enable Express "trust proxy").',
     default: config.get('server.trustProxy')
   })
   .options('max-hash-field-size', {
     type: 'number',
-    describe: 'The max number of bytes for a hash field before you must click to view it',
+    describe: 'The max number of bytes for a hash field before you must click to view it.',
     default: config.get('ui.maxHashFieldSize'),
   })
   .options('nosave', {
@@ -194,7 +284,7 @@ let args = yargs
       case '&':
       case '?':
       case '*':
-        throw new Error('Characters &, ? and * are invalid for param folding-char!');
+        throw new Error('Characters &, ? and * are not allowed for param folding-char!');
     }
 
     // parser special handling of params starting with "no-"
@@ -285,6 +375,7 @@ if(args['test']) {
 
 
 if (startServer) {
+  console.log(`Starting with NODE_ENV=${process.env.NODE_ENV} and config NODE_APP_INSTANCE=${process.env.NODE_APP_INSTANCE}`);
   // check if old deprecated config exists and merge into current one
   if (myUtils.hasDeprecatedConfig()) {
     console.log('==================================================================================================');
@@ -297,7 +388,7 @@ if (startServer) {
       config.ui = config.util.extendDeep(config.ui, oldConfig.ui);
       if (Array.isArray(oldConfig.connections) && oldConfig.connections.length > 0) {
         oldConfig.connections.forEach(function(cfg) {
-          if (!myUtils.containsConnection(config.connections, cfg)) {
+          if (!connectionWrapper.containsConnection(config.connections, cfg)) {
             config.connections.push(cfg);
           }
         });
@@ -370,16 +461,18 @@ function createConnectionObjectFromArgs(argList) {
 
   // now create connection object if enough params are set
   let connObj = null;
-  if (argList['sentinel-host'] || argList['sentinels'] || argList['redis-host'] || argList['redis-port'] || argList['redis-socket']
-    || argList['redis-password'] || argList['redis-db']) {
+  if (argList['clusters'] || argList['sentinel-host'] || argList['sentinels'] || argList['redis-host'] || argList['redis-port'] || argList['redis-socket']
+    || argList['redis-username'] || argList['redis-password'] || argList['redis-db']) {
 
     let db = parseInt(argList['redis-db']);
     connObj = {
       label: config.get('redis.defaultLabel'),
       dbIndex: Number.isNaN(db) ? 0 : db,
+      username: argList['redis-username'] || null,
       password: argList['redis-password'] || '',
       connectionName: config.get('redis.connectionName'),
-      optional: argList['redis-optional']
+      optional: argList['redis-optional'],
+      clusterNoTlsValidation: argList['clusterNoTlsValidation']
     };
 
     if (argList['redis-socket']) {
@@ -389,20 +482,108 @@ function createConnectionObjectFromArgs(argList) {
       connObj.host = argList['redis-host'] || 'localhost';
       connObj.port = argList['redis-port'] || 6379;
       connObj.port = parseInt(connObj.port);
+      connObj.isCluster = argList['is-cluster'];
+      connObj.sentinelUsername = argList['sentinel-username'] || null;
       connObj.sentinelPassword = argList['sentinel-password'] || '';
       if (argList['sentinels']) {
-        connObj.sentinels = myUtils.parseRedisSentinel('--sentinels', argList['sentinels']);
+        connObj.sentinels = myUtils.parseRedisServerList('--sentinels', argList['sentinels']);
         connObj.sentinelName = myUtils.getRedisSentinelGroupName(argList['sentinel-name']);
       }
       else if (argList['sentinel-host']) {
-        connObj.sentinels = myUtils.parseRedisSentinel('--sentinel-host or --sentinel-port',
+        connObj.sentinels = myUtils.parseRedisServerList('--sentinel-host or --sentinel-port',
           argList['sentinel-host'] + ':' + argList['sentinel-port']);
         connObj.sentinelName = myUtils.getRedisSentinelGroupName(argList['sentinel-name']);
+      }
+      else if (argList['clusters']) {
+        connObj.clusters = myUtils.parseRedisServerList('--clusters', argList['clusters']);
       }
     }
 
     if (argList['redis-tls']) {
+      // either basic tls support some special certs set and added to the tls config object
       connObj.tls = {};
+      if (argList['redis-tls-ca-cert-file'] || argList['redis-tls-ca-cert']
+          || argList['redis-tls-cert-file'] || argList['redis-tls-cert']
+          || argList['redis-tls-key-file'] || argList['redis-tls-key']
+          || argList['redis-tls-server-name']) {
+
+        if (argList['redis-tls-ca-cert-file']) {
+          connObj.tls.ca = fs.readFileSync(argList['redis-tls-ca-cert-file']);
+        }
+        else if (argList['redis-tls-ca-cert']) {
+          connObj.tls.ca = argList['redis-tls-ca-cert'];
+        }
+
+        if (argList['redis-tls-cert-file']) {
+          connObj.tls.cert = fs.readFileSync(argList['redis-tls-cert-file']);
+        }
+        else if (argList['redis-tls-cert']) {
+          connObj.tls.cert = argList['redis-tls-cert'];
+        }
+
+        if (argList['redis-tls-key-file']) {
+          connObj.tls.key = fs.readFileSync(argList['redis-tls-key-file']);
+        }
+        else if (argList['redis-tls-key']) {
+          connObj.tls.key = argList['redis-tls-key'];
+        }
+
+        if (argList['redis-tls-server-name']) {
+          connObj.tls.servername = argList['redis-tls-server-name'];
+        }
+      }
+
+      if (argList['insecure-certificate']) {
+        connObj.tls.rejectUnauthorized = false;
+      }
+    }
+
+    // either set 'sentinel-tls' to a boolean value to reuse same tls settings as defined for Redis server
+    // for Sentinel connections too
+    // or use 'sentinel-tls' with optional 'sentinel-tls-*' settings to define some independent tls settings and
+    // certificates to use and not reuse config for Redis server
+    if (argList['sentinel-tls']) {
+      connObj.enableTLSForSentinelMode = true;
+      // either basic tls or complex tls support for sentinels, same meaning as for redis server itself
+      connObj.sentinelTLS = {};
+      if (argList['sentinel-tls-ca-cert-file'] || argList['sentinel-tls-ca-cert']
+          || argList['sentinel-tls-cert-file'] || argList['sentinel-tls-cert']
+          || argList['sentinel-tls-key-file'] || argList['sentinel-tls-key']
+          || argList['sentinel-tls-server-name']) {
+
+        if (argList['sentinel-tls-ca-cert-file']) {
+          connObj.sentinelTLS.ca = fs.readFileSync(argList['sentinel-tls-ca-cert-file']);
+        }
+        else if (argList['sentinel-tls-ca-cert']) {
+          connObj.sentinelTLS.ca = argList['sentinel-tls-ca-cert'];
+        }
+
+        if (argList['sentinel-tls-cert-file']) {
+          connObj.sentinelTLS.cert = fs.readFileSync(argList['sentinel-tls-cert-file']);
+        }
+        else if (argList['sentinel-tls-cert']) {
+          connObj.sentinelTLS.cert = argList['sentinel-tls-cert'];
+        }
+
+        if (argList['sentinel-tls-key-file']) {
+          connObj.sentinelTLS.key = fs.readFileSync(argList['sentinel-tls-key-file']);
+        }
+        else if (argList['sentinel-tls-key']) {
+          connObj.sentinelTLS.key = argList['sentinel-tls-key'];
+        }
+
+        if (argList['sentinel-tls-server-name']) {
+          connObj.sentinelTLS.servername = argList['sentinel-tls-server-name'];
+        }
+      }
+      else {
+        // fallback if no special sentinel settings are defined - reuse redis one
+        connObj.sentinelTLS = connObj.tls;
+
+        if (argList['insecure-certificate']) {
+          connObj.sentinelTLS.rejectUnauthorized = false;
+        }
+      }
     }
   }
   return connObj;
@@ -419,38 +600,62 @@ function startAllConnections() {
     console.error(e.message);
     process.exit(2);
   }
+  // create new singleton object to hold all connections
+  redisConnections = connectionWrapper.setConnectionList([]);
 
   // redefine keys method before connections are started
   if (config.get('redis.useScan')) {
     console.log('Using scan instead of keys');
-    Object.defineProperty(Redis.prototype, 'keys', {
-      value: function(pattern, cb) {
-        let keys = [];
-        let that = this;
-        let scanCB = function(err, res) {
-          if (err) {
-            if (typeof cb === 'function') cb(err);
-            else {
+    const keysCallbackFunc = function(that, pattern, cb) {
+      let keys = [];
+
+      let scanCB = function(err, res) {
+        if (err) {
+          switch (typeof cb) {
+            case 'function':
+              cb(err);
+              break;
+            case 'object':   // promise
+              cb.reject(err);
+              break;
+            default:
               console.log('ERROR in redefined "keys" function to use "scan" instead without callback: ' +
-                  (err.message ? err.message : JSON.stringify(err)));
+                (err.message ? err.message : JSON.stringify(err)));
+          }
+        }
+        else {
+          let count = res[0], curKeys = res[1];
+          keys = keys.concat(curKeys);
+          if (Number(count) === 0) {
+            switch (typeof cb) {
+              case 'function':
+                cb(null, keys);
+                break;
+              case 'object':
+                cb.resolve(keys);
+                break;
+              default:
+                console.log('ERROR in redefined "keys" function to use "scan" instead - no callback given!');
             }
           }
           else {
-            let count = res[0], curKeys = res[1];
-            console.log("scanning: " + count + ": " + curKeys.length);
-            keys = keys.concat(curKeys);
-            if (Number(count) === 0) {
-              if (typeof cb === 'function') cb(null, keys);
-              else {
-                console.log('ERROR in redefined "keys" function to use "scan" instead - no callback given!');
-              }
-            }
-            else {
-              that.scan(count, 'MATCH', pattern, 'COUNT', config.get('redis.scanCount'), scanCB);
-            }
+            that.scan(count, 'MATCH', pattern, 'COUNT', config.get('redis.scanCount'), scanCB);
           }
-        };
-        return this.scan(0, 'MATCH', pattern, 'COUNT', config.get('redis.scanCount'), scanCB);
+        }
+      };
+      return that.scan(0, 'MATCH', pattern, 'COUNT', config.get('redis.scanCount'), scanCB);
+    }
+
+    Object.defineProperty(Redis.prototype, 'keys', {
+      value: function(pattern, cb) {
+        if (!cb) {
+          const that = this;
+          cb = new Promise(function(resolve, reject) {
+            keysCallbackFunc(that, pattern, {resolve: resolve, reject: reject});
+          });
+          return cb;
+        }
+        keysCallbackFunc(this, pattern, cb);
       }
     });
   }
@@ -462,12 +667,12 @@ function startAllConnections() {
   if (newDefault) {
     client = myUtils.createRedisClient(newDefault);
     redisConnections.push(client);
-    setUpConnection(client, newDefault.dbIndex);
+    redisConnections.setUpConnection(client);
 
     // now check if this one is already part of default connections
     // update it if needed
     let configChanged = false;
-    let oldDefault = myUtils.findConnection(config.connections, newDefault);
+    let oldDefault = connectionWrapper.findConnection(config.connections, newDefault);
     if (!oldDefault) {
       config.connections.push(newDefault);
       configChanged = true;
@@ -476,7 +681,7 @@ function startAllConnections() {
       // remove connectionId from newDefaults to allow comparison, otherwise non-equal every time
       delete newDefault.connectionId;
       if (!isEqual(oldDefault, newDefault)) {
-        myUtils.replaceConnection(config.connections, oldDefault, newDefault);
+        connectionWrapper.replaceConnection(config.connections, oldDefault, newDefault);
         configChanged = true;
       }
     }
@@ -494,7 +699,7 @@ function startAllConnections() {
     // fallback to localhost if nothing else configured
     client = myUtils.createRedisClient({label: config.get('redis.defaultLabel')});
     redisConnections.push(client);
-    setUpConnection(client, 0);
+    redisConnections.setUpConnection(client);
   }
 
   // now start all default connections (if not same as one given via command line)...
@@ -523,55 +728,16 @@ function startAllConnections() {
 function startDefaultConnections (connections, callback) {
   if (connections && Array.isArray(connections)) {
     connections.forEach(function (connection) {
-      if (!myUtils.containsConnection(redisConnections.map(function(c) {return c.options}), connection)) {
+      if (!redisConnections.containsConnection(connection)) {
         let client = myUtils.createRedisClient(connection);
         redisConnections.push(client);
-        setUpConnection(client, connection.dbIndex);
+        redisConnections.setUpConnection(client);
       }
     });
   }
   return callback(null);
 }
 
-function setUpConnection (redisConnection, db) {
-  redisConnection.on('error', function (err) {
-    console.error(`setUpConnection (${redisConnection.options.connectionId}) Redis error`, err.stack);
-  });
-  redisConnection.on('end', function () {
-    console.log(`connection (${redisConnection.options.connectionId}) closed. Attempting to Reconnect...`);
-  });
-  redisConnection.once('connect', connectToDB.bind(this, redisConnection, db));
-}
-
-
-function connectToDB (redisConnection, db) {
-  redisConnection.call('command', function(errCmd, cmdList) {
-    if (errCmd || !Array.isArray(cmdList)) {
-      console.log(`redis command "command" not supported, cannot build dynamic command list for (${redisConnection.options.connectionId}`);
-      return;
-    }
-    // console.debug('Got list of ' + cmdList.length + ' commands from server ' + redisConnection.options.host + ':' +
-    //   redisConnection.options.port);
-    redisConnection.options.commandList = {
-      all: cmdList.map((item) => (item[0].toLowerCase())),
-      ro: cmdList.filter((item) => (item[2].indexOf('readonly') >= 0)).map((item) => (item[0].toLowerCase()))
-    };
-  });
-
-  redisConnection.select(db, function (err) {
-    if (err) {
-      console.log(err);
-      process.exit();
-    }
-    let opt = redisConnection.options;
-    let hostPort = opt.path ? opt.path : opt.host + ':' + opt.port;
-    if (opt.type === 'sentinel') {
-      hostPort = `sentinel ${opt.sentinels[0].host}:${opt.sentinels[0].port}:${opt.name}`;
-    }
-    console.log('Redis Connection ' + hostPort +
-      (opt.tls ? ' with TLS' : '') + ' using Redis DB #' + opt.db);
-  });
-}
 
 
 function startWebApp () {
